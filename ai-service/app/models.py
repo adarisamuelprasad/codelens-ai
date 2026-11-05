@@ -44,6 +44,9 @@ class Finding(_CamelModel):
     file: str = Field(min_length=1, max_length=500)
     line: int = Field(ge=1)
     snippet: str = Field(min_length=1, max_length=MAX_SNIPPET_CHARS)
+    # codelens-api's name for the file's language ("python", "go", "csharp"...),
+    # derived from the extension. Optional: older clients omit it.
+    language: str = Field(default="", max_length=20, pattern=r"^[a-z0-9+#]*$")
 
 
 class ExplainRequest(_CamelModel):

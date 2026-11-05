@@ -1,21 +1,33 @@
 # CodeLens AI
 
-A pull-request reviewer for Java. Static rules decide what is wrong and
-where; an LLM explains each finding and suggests a fix. Findings are reported
-only on lines the PR changed, so the bot does not bury a small change under
-old problems.
+A pull-request reviewer for any repository. Static rules decide what is
+wrong and where; an LLM explains each finding and suggests a fix in the
+file's own language. Findings are reported only on lines the PR changed, so
+the bot does not bury a small change under old problems.
 
-**Status:** backend and AI service built, tested, and run end to end on 39
-real merged PRs from open-source projects. Not deployed; no dashboard yet
-(see [Next](#next)).
+How deep it looks depends on the language:
+
+| Files | Checked by |
+|---|---|
+| Java | PMD (26 curated rules) + CodeLens's own JavaParser rules + the missing-test rule |
+| Python, JavaScript, TypeScript, Go, C#, PHP, Ruby, Kotlin, C, C++ | CodeLens's Semgrep rule pack (62 rules) |
+| Every text file, config included (`.env`, YAML, `.properties`, Terraform, shell...) | The secret scan |
+
+**Status:** backend and AI service built and tested. The Java analysis has
+been run end to end on 39 real merged PRs from open-source projects (numbers
+below). The other languages are new: every rule is pinned by fixture tests,
+but they have **not yet been measured on real PRs**. Not deployed; no
+dashboard yet (see [Next](#next)).
 
 ## What it does
 
 1. Receives GitHub's `pull_request` webhook. The HMAC-SHA256 signature is
    verified in constant time before anything else, and an unset secret
    rejects everything.
-2. Fetches the changed `.java` files at the PR's head commit (fork PRs
-   included), and parses each diff to learn exactly which lines were added.
+2. Fetches the changed source and config files at the PR's head commit
+   (fork PRs included), in any language, skipping vendored, generated,
+   minified and lock files, and parses each diff to learn exactly which lines
+   were added.
 3. Runs **PMD** (26 curated bug, reliability, concurrency and security rules,
    no style rules) and **CodeLens's own JavaParser rules**:
 
@@ -29,6 +41,32 @@ real merged PRs from open-source projects. Not deployed; no dashboard yet
    | `PROXY_ANNOTATION_ON_PRIVATE` | `@Transactional`, `@Async` or `@Cacheable` on a private, final or static method (silently ignored by Spring) |
    | `SWALLOWED_EXCEPTION` | A catch that only prints the stack trace and carries on |
    | `MISSING_TEST` | Changed public logic with no test touched in the same module |
+
+   For every other language, **Semgrep** runs CodeLens's own rule pack
+   (`backend/src/main/resources/semgrep/codelens-rules.yml`), written for
+   precision the same way:
+
+   | Rule | Languages |
+   |---|---|
+   | `SQL_INJECTION` | Python, JS/TS, Go, PHP, Ruby, C#, Kotlin |
+   | `COMMAND_INJECTION` | Python, JS/TS, Go, PHP, Ruby, C#, C/C++ |
+   | `CODE_INJECTION` (eval and friends) | Python, JS/TS, PHP, Ruby |
+   | `INSECURE_DESERIALIZATION` | Python, PHP, Ruby, C#, JS |
+   | `TLS_VERIFY_DISABLED` | Python, JS/TS, Go, PHP, Ruby, C#, Kotlin |
+   | `UNSAFE_HTML` (XSS sinks) | JS/TS/JSX, Python, PHP, Ruby, Go, C# |
+   | `PERMISSIVE_CORS`, `CSRF_DISABLED` | Python, JS/TS, Go, PHP, Ruby, C#, Kotlin |
+   | `SWALLOWED_EXCEPTION` | Python, JS/TS, Go, C#, PHP, Kotlin, C++ |
+   | `DEBUG_MODE` | Python (Flask, Django) |
+   | `UNSAFE_BUFFER_FUNCTION` | C, C++ |
+   | `MUTABLE_DEFAULT_ARGUMENT`, `LITERAL_IDENTITY_COMPARISON` | Python |
+   | `NAN_COMPARISON` | JS/TS |
+   | `DEFER_IN_LOOP` | Go |
+
+   Semgrep runs offline with metrics off: no PR code leaves the server. If it
+   is not installed, the review still runs (Java and secrets) and the PR
+   comment says which checks were skipped instead of implying "no issues".
+   `HARDCODED_SECRET` covers every text file through a language-independent
+   scanner that shares the Java rule's name and value tests.
 
 4. Keeps findings on added lines only, removes overlapping ones, ranks by a
    fixed severity per rule, and caps the list.
@@ -61,10 +99,17 @@ Full method and every number in [docs/evaluation.md](docs/evaluation.md).
   tuning set (`MISSING_TEST`, 5 of 5 wrong) was fixed before the held-out run.
 - About 4 s to review a typical PR, mostly GitHub API time.
 
+All of the above is **Java only**. For the other languages the only evidence
+so far is the fixture test (`SemgrepAnalyzerTest`): 10 files across the
+supported languages with 71 planted issues next to near misses (parameterised
+queries, argument-array commands, sanitised HTML). All 71 are found and
+nothing else fires. That proves each rule matches what it should on code
+written to test it; it is not a precision number on real code.
+
 ## Layout
 
 ```
-backend/     codelens-api: Java 17, Spring Boot 3.4, PMD 7, JavaParser, JPA + Flyway
+backend/     codelens-api: Java 17, Spring Boot 3.4, PMD 7, JavaParser, Semgrep, JPA + Flyway
 ai-service/  Python: FastAPI, LangChain (Gemini or Groq), output validation
 docs/        architecture.md (flow, API contracts, threat model), evaluation.md
 ```
@@ -76,6 +121,7 @@ docs/        architecture.md (flow, API contracts, threat model), evaluation.md
 cd backend
 export CODELENS_ADMIN_KEY=change-me
 export GITHUB_TOKEN=...            # optional: higher rate limit; or a GitHub App, see application.properties
+pip install semgrep                # rules for the non-Java languages; or set CODELENS_SEMGREP_COMMAND
 mvn spring-boot:run                # http://localhost:8082
 
 # review any public PR
@@ -98,13 +144,17 @@ downloaded.
 
 | Part | Tests | Command |
 |---|---|---|
-| codelens-api | 56, including the full webhook-to-database flow on H2 and the injected-comment attack | `cd backend && mvn test` |
-| ai-service | 114, no network or API keys | `cd ai-service && .venv/Scripts/python -m pytest -q` |
+| codelens-api | 75, including the full webhook-to-database flow on H2, a mixed Python/config PR, the injected-comment attack and every Semgrep fixture | `cd backend && mvn test` |
+| ai-service | 119, no network or API keys | `cd ai-service && .venv/Scripts/python -m pytest -q` |
 
-`OwaspBenchmarkEval` runs as well when `OWASP_BENCHMARK_DIR` is set.
+`OwaspBenchmarkEval` runs as well when `OWASP_BENCHMARK_DIR` is set. The
+Semgrep fixture tests need Semgrep on `PATH` (or `CODELENS_SEMGREP_COMMAND`);
+without it they are reported as skipped, not passed.
 
 ## Next
 
+- [ ] Measure the non-Java rules on real merged PRs per language, the way the Java rules were (held-out set, precision and silence rate)
+- [ ] OWASP BenchmarkPython for the Python injection rules
 - [ ] Fix the two held-out false-positive kinds (commented empty catch, CLI `System.out`), then measure on a new held-out set
 - [ ] Measure LLM explanation quality and false-positive triage against human labels (`PUT /api/findings/{id}/label`)
 - [ ] Intra-procedural taint tracking for the injection rules (the OWASP decoys)

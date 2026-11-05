@@ -31,8 +31,10 @@ public class PmdAnalyzer {
         config.setIgnoreIncrementalAnalysis(true);
 
         List<Finding> out = new ArrayList<>();
+        List<ChangedFile> java = files.stream().filter(ChangedFile::isJava).toList();
+        if (java.isEmpty()) return out;
         try (PmdAnalysis pmd = PmdAnalysis.create(config)) {
-            for (ChangedFile f : files) {
+            for (ChangedFile f : java) {
                 pmd.files().addSourceFile(FileId.fromPathLikeString(f.path()), f.content());
             }
             Report report = pmd.performAnalysisAndCollectReport();

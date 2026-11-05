@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 import com.codelens.analysis.Finding.Severity;
+import com.codelens.diff.Languages;
 
 /** The single PR comment CodeLens keeps up to date (found again by MARKER). */
 public final class CommentRenderer {
@@ -20,9 +21,8 @@ public final class CommentRenderer {
         StringBuilder md = new StringBuilder(MARKER).append("\n### CodeLens review\n\n");
 
         if (r.findings.isEmpty()) {
-            return md.append("No issues found on the lines this PR changed (")
-                .append(r.filesAnalyzed).append(r.filesAnalyzed == 1 ? " Java file" : " Java files")
-                .append(" analysed).\n").toString();
+            md.append("No issues found on the lines this PR changed (").append(files(r)).append(" analysed).\n");
+            return appendCoverageNote(md, r).toString();
         }
 
         Map<Severity, Integer> counts = new TreeMap<>();
@@ -33,7 +33,7 @@ public final class CommentRenderer {
             counts.forEach((s, n) -> md.append(n).append(' ').append(s.name().toLowerCase()).append(", "));
             md.setLength(md.length() - 2);
         }
-        md.append(" (").append(r.filesAnalyzed).append(" Java files analysed)\n\n");
+        md.append(" (").append(files(r)).append(" analysed)\n\n");
 
         if (!shown.isEmpty()) {
             md.append("| Severity | Rule | Where | What |\n|---|---|---|---|\n");
@@ -49,7 +49,8 @@ public final class CommentRenderer {
                     md.append("**`").append(f.ruleId).append("` at ").append(link(f, r, htmlBase)).append("**\n\n")
                         .append(f.explanation).append("\n\n");
                     if (f.suggestedFix != null && !f.suggestedFix.isBlank()) {
-                        md.append("Suggested fix:\n\n```java\n").append(f.suggestedFix.replace("```", "")).append("\n```\n\n");
+                        md.append("Suggested fix:\n\n```").append(fence(f.file)).append('\n')
+                            .append(f.suggestedFix.replace("```", "")).append("\n```\n\n");
                     }
                 }
                 md.append("</details>\n");
@@ -63,9 +64,30 @@ public final class CommentRenderer {
                 .append(": ").append(cell(f.aiVerdictReason == null ? f.message : f.aiVerdictReason)).append("\n"));
             md.append("\n</details>\n");
         }
-        md.append("\n<sub>Findings come from static rules (PMD and CodeLens) on lines this PR changed. "
+        appendCoverageNote(md, r);
+        md.append("\n<sub>Findings come from static rules (PMD, Semgrep and CodeLens's own) on lines this PR changed. "
             + "Explanations are AI-written; security findings are never auto-dismissed.</sub>\n");
         return md.toString();
+    }
+
+    private static String files(Review r) {
+        return r.filesAnalyzed + (r.filesAnalyzed == 1 ? " file" : " files");
+    }
+
+    // Say so when a language went unchecked, rather than imply "no issues".
+    private static StringBuilder appendCoverageNote(StringBuilder md, Review r) {
+        if (r.semgrepMissing) {
+            md.append("\n> Only Java and secret checks ran: Semgrep is not installed on this CodeLens server, "
+                + "so the rules for this PR's other languages were skipped.\n");
+        }
+        return md;
+    }
+
+    /** Markdown fence tag for a file's language; none when unknown. */
+    static String fence(String file) {
+        String language = Languages.of(file);
+        if (language == null || language.equals("dotenv") || language.equals("properties")) return "";
+        return language;
     }
 
     private static String link(FindingRecord f, Review r, String htmlBase) {

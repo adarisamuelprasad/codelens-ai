@@ -23,6 +23,7 @@ import com.codelens.analysis.Finding;
 import com.codelens.analysis.RuleCatalog;
 import com.codelens.diff.ChangedFile;
 import com.codelens.diff.DiffParser;
+import com.codelens.diff.Languages;
 import com.codelens.github.GitHubClient;
 import com.codelens.github.GitHubClient.PrFile;
 import com.codelens.github.GitHubClient.PullRequest;
@@ -92,8 +93,9 @@ public class ReviewService {
             r.prTitle = pr.title();
             r.headSha = pr.headSha();
 
-            List<ChangedFile> files = fetchJavaFiles(pr, token, r);
+            List<ChangedFile> files = fetchFiles(pr, token, r);
             List<Finding> findings = pipeline.analyze(files);
+            r.semgrepMissing = pipeline.semgrepMissingFor(files);
             Map<String, ChangedFile> byPath = files.stream().collect(Collectors.toMap(ChangedFile::path, f -> f));
             List<FindingRecord> records = new ArrayList<>();
             for (Finding f : findings) records.add(toRecord(f, r, byPath.get(f.file())));
@@ -119,10 +121,11 @@ public class ReviewService {
         }
     }
 
-    private List<ChangedFile> fetchJavaFiles(PullRequest pr, String token, Review r) {
+    /** Every source or config file the PR added or changed, in any language CodeLens reads. */
+    private List<ChangedFile> fetchFiles(PullRequest pr, String token, Review r) {
         List<ChangedFile> out = new ArrayList<>();
         for (PrFile f : github.files(pr.repo(), pr.number(), token)) {
-            if (!f.filename().endsWith(".java") || "removed".equals(f.status())) continue;
+            if (!Languages.reviewable(f.filename()) || "removed".equals(f.status())) continue;
             boolean added = "added".equals(f.status());
             if (out.size() >= maxFiles || (f.patch() == null && !added)) {
                 r.filesSkipped++; // over the cap, or GitHub omitted the diff (too large)
@@ -152,9 +155,10 @@ public class ReviewService {
         for (int i = 0; i < Math.min(aiMaxFindings, records.size()); i++) {
             FindingRecord f = records.get(i);
             RuleCatalog.Rule rule = RuleCatalog.get(f.ruleId);
+            String language = Languages.of(f.file);
             items.add(new AiExplainer.Item("f" + i, f.ruleId, f.category.name().toLowerCase(Locale.ROOT),
                 f.severity.name().toLowerCase(Locale.ROOT), f.message, rule == null ? "" : rule.description(),
-                f.file, f.line, f.snippet == null ? "" : f.snippet));
+                f.file, f.line, f.snippet == null ? "" : f.snippet, language == null ? "" : language));
         }
         Map<String, AiExplainer.Explanation> results = ai.explain(pr.repo(), pr.title(), items);
         for (int i = 0; i < items.size(); i++) {

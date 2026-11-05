@@ -31,22 +31,38 @@ public class AnalysisPipeline {
     private final PmdAnalyzer pmd;
     private final JavaRules rules;
     private final MissingTestRule missingTests;
+    private final SecretScanner secrets;
+    private final SemgrepAnalyzer semgrep;
     private final int maxFindings;
 
-    public AnalysisPipeline(PmdAnalyzer pmd, JavaRules rules, MissingTestRule missingTests,
+    public AnalysisPipeline(PmdAnalyzer pmd, JavaRules rules, MissingTestRule missingTests, SecretScanner secrets,
+                            SemgrepAnalyzer semgrep,
                             @Value("${codelens.analysis.max-findings:50}") int maxFindings) {
         this.pmd = pmd;
         this.rules = rules;
         this.missingTests = missingTests;
+        this.secrets = secrets;
+        this.semgrep = semgrep;
         this.maxFindings = maxFindings;
     }
 
+    /**
+     * Java goes through PMD and the JavaParser rules, every other language with
+     * a rule pack through Semgrep, and every text file through the secret scan.
+     */
     public List<Finding> analyze(List<ChangedFile> files) {
         List<Finding> raw = new ArrayList<>();
         raw.addAll(pmd.analyze(files));
         raw.addAll(rules.analyze(files));
         raw.addAll(missingTests.analyze(files));
+        raw.addAll(secrets.analyze(files));
+        raw.addAll(semgrep.analyze(files));
         return select(raw, files, maxFindings);
+    }
+
+    /** True when some of these files need Semgrep and it is not installed. */
+    public boolean semgrepMissingFor(List<ChangedFile> files) {
+        return files.stream().anyMatch(SemgrepAnalyzer::handles) && !semgrep.available();
     }
 
     static List<Finding> select(List<Finding> raw, List<ChangedFile> files, int cap) {

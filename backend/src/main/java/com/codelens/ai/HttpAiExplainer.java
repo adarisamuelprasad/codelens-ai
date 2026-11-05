@@ -87,6 +87,7 @@ public class HttpAiExplainer implements AiExplainer {
         m.put("file", i.file());
         m.put("line", i.line());
         m.put("snippet", i.snippet());
+        if (i.language() != null && !i.language().isEmpty()) m.put("language", i.language());
         return m;
     }
 

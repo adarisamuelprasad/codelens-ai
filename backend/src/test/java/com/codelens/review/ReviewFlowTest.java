@@ -76,17 +76,22 @@ class ReviewFlowTest {
            }
         """;
 
+    static final List<GitHubClient.PrFile> JAVA_PR = List.of(
+        new GitHubClient.PrFile("src/main/java/shop/OrderRepository.java", "modified", PATCH),
+        new GitHubClient.PrFile("README.md", "modified", "@@ -1 +1 @@\n+x\n"));
+
     static class FakeGitHub implements GitHubClient {
         final List<String> comments = new ArrayList<>();
+        List<PrFile> files = JAVA_PR;
+        final Map<String, String> contents = new java.util.HashMap<>();
         @Override public PullRequest pull(String repo, int n, String token) {
             return new PullRequest(repo, n, "Add order lookup", "abc123", repo, "https://github.com/" + repo + "/pull/" + n);
         }
         @Override public List<PrFile> files(String repo, int n, String token) {
-            return List.of(new PrFile("src/main/java/shop/OrderRepository.java", "modified", PATCH),
-                new PrFile("README.md", "modified", "@@ -1 +1 @@\n+x\n"));
+            return files;
         }
         @Override public String content(String repo, String path, String ref, String token) {
-            return SERVICE;
+            return contents.getOrDefault(path, SERVICE);
         }
         @Override public void upsertComment(String repo, int n, String marker, String body, String token) {
             comments.add(body);
@@ -123,6 +128,8 @@ class ReviewFlowTest {
     @BeforeEach
     void reset() {
         github.comments.clear();
+        github.files = JAVA_PR;
+        github.contents.clear();
         ai.enabled = true;
     }
 
@@ -167,6 +174,31 @@ class ReviewFlowTest {
         assertEquals(10, sql.line);
         assertTrue(sql.snippet.contains("10 | "), sql.snippet);
         assertEquals("Explained SQL_INJECTION", sql.explanation);
+    }
+
+    @Autowired com.codelens.analysis.SemgrepAnalyzer semgrep;
+
+    @Test
+    void aPythonAndConfigPrIsReviewedToo() throws Exception {
+        github.files = List.of(
+            new GitHubClient.PrFile("app/tools.py", "added", null),
+            new GitHubClient.PrFile(".env.production", "added", null),
+            new GitHubClient.PrFile("web/node_modules/x/index.js", "added", null),
+            new GitHubClient.PrFile("docs/logo.png", "added", null));
+        github.contents.put("app/tools.py", "import os\n\ndef calc(expr):\n    return eval(expr)\n");
+        github.contents.put(".env.production", "PORT=8080\nDB_PASSWORD=pr0d-S3cret-99\n");
+
+        Review r = load(webhook(PR_OPENED));
+        assertEquals(Review.Status.DONE, r.status, r.error);
+        assertEquals(2, r.filesAnalyzed, "vendored code and images are not fetched");
+
+        List<String> found = r.findings.stream().map(f -> f.ruleId + "@" + f.file + ":" + f.line).toList();
+        // The secret scan needs nothing installed.
+        assertTrue(found.contains("HARDCODED_SECRET@.env.production:2"), found.toString());
+        // The Python rules need Semgrep; without it they are skipped, never faked.
+        assertEquals(semgrep.available(), found.contains("CODE_INJECTION@app/tools.py:4"), found.toString());
+
+        assertTrue(ai.lastItems.get().stream().anyMatch(i -> i.language().equals("dotenv")));
     }
 
     @Test
