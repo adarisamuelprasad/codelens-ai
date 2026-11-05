@@ -16,6 +16,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
+import jakarta.persistence.Transient;
 
 @Entity
 public class Review {
@@ -43,6 +44,9 @@ public class Review {
     public Instant createdAt;
     public Instant finishedAt;
     public Long durationMs;
+    /** Set during a run: some files needed Semgrep and it is not installed. Shown in the PR comment only. */
+    @Transient
+    public boolean semgrepMissing;
 
     @OneToMany(mappedBy = "review", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("id")

@@ -158,3 +158,24 @@ def test_prompt_snippet_is_truncated_end_to_end():
     inputs = build_prompt_inputs(req.context, req.findings[0])
     assert len(inputs["snippet"]) <= MAX_PROMPT_SNIPPET_CHARS + 2 * (len(TRUNCATION_MARKER) + 1)
     assert "42 | " in inputs["snippet"]
+
+
+def test_reviewer_is_not_tied_to_one_language():
+    system, _ = _render(_request())
+    assert "Java reviewer" not in system
+    assert "same language as the code snippet" in system
+
+
+def test_language_is_named_in_the_finding_block():
+    _, human = _render(_request(language="python", file="app/db.py"))
+    assert "Language: Python" in _block(human, "finding")
+    _, human = _render(_request(language="csharp", file="Api/UserController.cs"))
+    assert "Language: C#" in _block(human, "finding")
+
+
+def test_language_falls_back_to_the_file_extension():
+    # Older codelens-api versions do not send `language`.
+    _, human = _render(_request(file="web/src/page.tsx"))
+    assert "Language: TypeScript" in _block(human, "finding")
+    _, human = _render(_request(file="Makefile"))
+    assert "Language: unknown" in _block(human, "finding")

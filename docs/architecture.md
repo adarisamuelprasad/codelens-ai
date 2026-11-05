@@ -5,9 +5,11 @@
 ```
 GitHub  --pull_request webhook (HMAC-SHA256 signed)-->  codelens-api (Java 17, Spring Boot)
                                                           1. verify signature, enqueue review
-        <--GET PR files + file contents at head SHA--     2. fetch changed .java files
+        <--GET PR files + file contents at head SHA--     2. fetch changed source + config files, any language
                                                           3. parse diff: which lines did this PR add?
-                                                          4. PMD (curated rules) + CodeLens rules (JavaParser)
+                                                          4. Java: PMD (curated rules) + CodeLens rules (JavaParser)
+                                                             other languages: Semgrep + CodeLens rule pack
+                                                             every text file: secret scan
                                                           5. keep findings on added lines only
                                                           6. deterministic severity, dedupe, cap
                                                           7. --findings--> ai-service (Python, FastAPI + LangChain)
@@ -16,9 +18,40 @@ GitHub  --pull_request webhook (HMAC-SHA256 signed)-->  codelens-api (Java 17, S
         <--one summary comment, updated on re-runs--      9. post / update the PR comment
 ```
 
-The Java side decides **what** is a finding. Every finding comes from a rule
+codelens-api decides **what** is a finding. Every finding comes from a rule
 with a fixed id, a file and a line, so it can be checked and counted. The
 LLM only explains findings that already exist; it never invents new ones.
+
+## Languages
+
+| Analyzer | Runs on | Where the rule's category and severity come from |
+|---|---|---|
+| `PmdAnalyzer`, `JavaRules`, `MissingTestRule` | `.java` | `RuleCatalog` |
+| `SemgrepAnalyzer` | Python, JS/TS, Go, C#, PHP, Ruby, Kotlin, C/C++ (`Languages.SEMGREP`) | `RuleCatalog`, via each Semgrep rule's `metadata.codelens_rule` |
+| `SecretScanner` | every reviewable non-Java file, configs included | `RuleCatalog` |
+
+Semgrep's own severity field is ignored: a rule id means the same severity
+in every language, and `SemgrepAnalyzerTest` fails if a rule in the pack names
+an id `RuleCatalog` does not define.
+
+Semgrep is a separate program, not a library. `SemgrepAnalyzer` writes the
+PR's files to a temp folder and runs it there with `--metrics=off` and only
+the bundled rule file, so no PR code is sent anywhere. Two details matter:
+
+- Each file is written as `<n>/<file name>`, not at its repository path.
+  Semgrep skips `test/` and `tests/` folders by default and an empty
+  `.semgrepignore` does not stop it; a numbered folder does, and it also
+  means a hostile path in the PR can never resolve outside the temp folder.
+- It fails soft. Missing binary, timeout, crash: the analyzer reports
+  nothing, the rest of the review runs, and the PR comment says the
+  non-Java rules were skipped. A review that silently checked less than it
+  claims would be worse than one that says so.
+
+Rules that match a multi-line construct report the line Semgrep starts the
+match on. Where that line may not be the one a PR changes (an option inside
+an object literal, a JSX attribute), the rule narrows the match
+(`focus-metavariable`, `pattern-regex`) so the reported line is the one with
+the problem, because only added lines are reported.
 
 ## Why findings only on added lines
 
@@ -45,7 +78,8 @@ triage step. So:
 SpotBugs analyses compiled bytecode. Building an arbitrary PR's repository
 (dependencies, build tool, Java version) is a project of its own and a
 sandboxing problem. PMD and JavaParser work on source, which is what the
-GitHub API returns.
+GitHub API returns. The same reasoning picked Semgrep for the other
+languages: it parses source per file and needs no build.
 
 ## API contract: ai-service (server-to-server only)
 
@@ -57,7 +91,8 @@ POST /v1/explain        header X-CodeLens-Key: <shared secret>
     { "id": "f1", "ruleId": "SQL_INJECTION", "category": "security",
       "severity": "high", "message": "...", "ruleDescription": "...",
       "file": "src/main/java/.../UserRepository.java", "line": 42,
-      "snippet": "40 | ...\n41 | ...\n42 | ...\n43 | ..." }   numbered lines around the finding
+      "snippet": "40 | ...\n41 | ...\n42 | ...\n43 | ...",   numbered lines around the finding
+      "language": "java" }                          optional: python, go, csharp...; else guessed from the extension
   ]
 }
 -> 200 { "model": "gemini-2.5-flash",

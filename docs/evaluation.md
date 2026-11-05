@@ -4,6 +4,13 @@ Measured 2026-10-30. Two kinds of evidence: a public labelled benchmark for
 the security rules, and real merged pull requests for the whole pipeline.
 Numbers that came out badly are reported as they came out.
 
+**Scope: Java only.** Everything below was measured when CodeLens reviewed
+Java alone. The rules for Python, JavaScript/TypeScript, Go, C#, PHP, Ruby,
+Kotlin and C/C++ (added 2026-11-05, Semgrep rule pack) and the secret scan
+for non-Java files have fixture tests only: 71 planted issues across 10 files,
+all found, no other findings. That is not a real-world precision number and
+is not presented as one; measuring them on real PRs is the next evaluation.
+
 ## 1. OWASP Benchmark v1.2: the injection rules
 
 [OWASP Benchmark](https://github.com/OWASP-Benchmark/BenchmarkJava) is a

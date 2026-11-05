@@ -1,0 +1,1002 @@
+# CodeLens rule pack for every language that is not Java.
+#
+# Java has PMD and CodeLens's own JavaParser rules; these Semgrep rules carry
+# the same idea to Python, JavaScript/TypeScript, Go, C#, PHP, Ruby, Kotlin
+# and C/C++. Each rule's metadata.codelens_rule is a RuleCatalog id, which is
+# where category and severity come from (never from here and never from the
+# LLM), and RuleCatalogTest fails if one is missing.
+#
+# Written for precision over recall, like the Java rules: a reviewer bot that
+# cries wolf gets uninstalled. Each rule fires on a shape that is wrong almost
+# every time it appears, and the fixtures under
+# src/test/resources/semgrep-fixtures/ pin both the hits and the near misses.
+
+rules:
+
+  # ---------------------------------------------------------------- SQL_INJECTION
+
+  - id: sql-injection.python
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      The SQL text is built from a runtime value (f-string, % or + or .format)
+      and passed to $EXEC. Pass the value as a bound parameter instead.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$EXEC($ARG, ...)
+          - pattern: |
+              $V = $ARG
+              ...
+              $DB.$EXEC($V, ...)
+      - metavariable-regex:
+          metavariable: $EXEC
+          regex: ^(execute|executemany|executescript|raw|mogrify|read_sql|read_sql_query)$
+      # SQL text, with a value spliced in: f"..{x}..", "..." % x, "..." + x, "...".format(x)
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:[rbu]?f|f[rb])?["']+\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:(?:[rbu]?f|f[rb])["'].*\{.*|["'].*["']\s*(?:%|\+|\.format\().*)$
+
+  - id: sql-injection.sqlalchemy-text
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      sqlalchemy text() is given SQL built from a runtime value. Use :name
+      placeholders and pass the values to execute().
+    pattern-either:
+      - pattern: sqlalchemy.text(f"...")
+      - pattern: sqlalchemy.text("..." % $X)
+      - pattern: sqlalchemy.text("..." + $X)
+      - pattern: sqlalchemy.text("...".format(...))
+
+  - id: sql-injection.js
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      The SQL text is built from a runtime value and passed to $Q. Use the
+      driver's placeholders (? or $1) and pass the values separately.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$Q($ARG, ...)
+          - pattern: |
+              $V = $ARG;
+              ...
+              $DB.$Q($V, ...);
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^(query|execute|raw|exec|run|all|get|prepare|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+      # SQL text with ${...} interpolated, or a string literal followed by +
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^[`'"]\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:`.*\$\{.*|['"].*['"]\s*\+.*)$
+
+  - id: sql-injection.go
+    languages: [go]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      The SQL text is built with fmt.Sprintf or + and passed to $Q. Use ? or
+      $1 placeholders and pass the values as arguments.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$Q($ARG, ...)
+          - pattern: $DB.$Q($CTX, $ARG, ...)
+          - pattern: |
+              $V := $ARG
+              ...
+              $DB.$Q(<... $V ...>, ...)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Prepare|PrepareContext|Raw|Select|Get)$
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:fmt\.Sprintf\(\s*)?[`"]\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:fmt\.Sprintf\(.*,.*|[`"].*[`"]\s*\+.*)$
+
+  - id: sql-injection.php
+    languages: [php]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      A runtime value is concatenated or interpolated into the SQL text. Use a
+      prepared statement with bound parameters (PDO or mysqli).
+    patterns:
+      - pattern-either:
+          - pattern: mysqli_query($C, $ARG, ...)
+          - pattern: mysql_query($ARG, ...)
+          - pattern: pg_query($C, $ARG)
+          - pattern: $DB->query($ARG, ...)
+          - pattern: $DB->exec($ARG, ...)
+          - pattern: $DB->prepare($ARG, ...)
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^['"]\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      # "..." . $x, or "... $x ..." / "... {$x} ..." (double quotes interpolate)
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:['"].*['"]\s*\..*|"[^"]*\$[A-Za-z_{].*)$
+
+  - id: sql-injection.ruby
+    languages: [ruby]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      SQL with a value interpolated into it. Use placeholders:
+      where("name = ?", name) or a hash condition.
+    patterns:
+      - pattern-either:
+          - pattern: $M.$Q("...#{...}...", ...)
+          - pattern: $M.$Q("..." + $X, ...)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^(where|find_by_sql|execute|exec_query|select_all|select_one|select_value|order|having|joins|group|pluck|delete_all|update_all)$
+
+  - id: sql-injection.csharp
+    languages: [csharp]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      The SQL text is built from a runtime value. Use SqlParameter, or
+      FromSqlInterpolated / ExecuteSqlInterpolated, which parameterise for you.
+    patterns:
+      - pattern-either:
+          - pattern: new SqlCommand($ARG, ...)
+          - pattern: new SqliteCommand($ARG, ...)
+          - pattern: new NpgsqlCommand($ARG, ...)
+          - pattern: new MySqlCommand($ARG, ...)
+          - pattern: $DB.FromSqlRaw($ARG, ...)
+          - pattern: $DB.ExecuteSqlRaw($ARG, ...)
+          - pattern: $DB.ExecuteSqlRawAsync($ARG, ...)
+          - pattern: $CMD.CommandText = $ARG
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:string\.Format\(\s*)?\$?@?"\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:\$@?".*\{.*|@?".*"\s*\+.*|string\.Format\(.*,.*)$
+
+  - id: sql-injection.kotlin
+    languages: [kotlin]
+    severity: ERROR
+    metadata: { codelens_rule: SQL_INJECTION }
+    message: >-
+      A runtime value is concatenated or templated into the SQL text. Use a
+      PreparedStatement with ? placeholders.
+    patterns:
+      - pattern: $S.$Q($ARG, ...)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^(executeQuery|executeUpdate|execute|prepareStatement|createQuery|createNativeQuery|query|queryForObject|queryForList|update)$
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^"\s*(select|insert|update|delete|merge|with|replace|create|drop|alter|truncate)\b
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?is)^(?:".*"\s*\+.*|"[^"]*\$[A-Za-z_{].*)$
+
+  # ------------------------------------------------------------ COMMAND_INJECTION
+
+  - id: command-injection.python-shell
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command built from a runtime value. Pass an argument list
+      without shell=True (subprocess.run(["cmd", arg])) so the value cannot
+      add commands.
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+          - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+          - pattern: commands.getoutput($CMD)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
+      - pattern-not: subprocess.$F("...", ...)
+      - pattern-not: subprocess.$F(["...", ...], ...)
+      - pattern-not: commands.getoutput("...")
+
+  - id: command-injection.js
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command built from a runtime value. Use execFile or spawn
+      with an argument array (no shell) so the value cannot add commands.
+    patterns:
+      - pattern-either:
+          - pattern: require('child_process').$F($CMD, ...)
+          - pattern: child_process.$F($CMD, ...)
+          - pattern: |
+              import { $F } from 'child_process';
+              ...
+              $F($CMD, ...);
+          - pattern: |
+              import { $F } from 'node:child_process';
+              ...
+              $F($CMD, ...);
+          - pattern: |
+              const { $F } = require('child_process');
+              ...
+              $F($CMD, ...);
+          - pattern: |
+              $CP = require('child_process');
+              ...
+              $CP.$F($CMD, ...);
+      - metavariable-regex:
+          metavariable: $F
+          regex: ^(exec|execSync)$
+      # A constant command is fine, and so is a template with no ${...} in it.
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: (?s)^(?!['"][^'"]*['"]$)(?!`[^`$]*`$).*
+      - focus-metavariable: $CMD
+
+  - id: command-injection.go
+    languages: [go]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command built from a runtime value. Call the program
+      directly, exec.Command("prog", arg), so the value is one argument and
+      cannot add commands.
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("$SH", "$C", $CMD, ...)
+          - pattern: exec.CommandContext($CTX, "$SH", "$C", $CMD, ...)
+      - metavariable-regex:
+          metavariable: $SH
+          regex: ^(.*/)?(sh|bash|zsh|cmd|cmd\.exe|powershell|pwsh)$
+      - metavariable-regex:
+          metavariable: $C
+          regex: ^(-c|/c|/C|-Command)$
+      - pattern-not: exec.Command("$SH", "$C", "...", ...)
+      - pattern-not: exec.CommandContext($CTX, "$SH", "$C", "...", ...)
+
+  - id: command-injection.php
+    languages: [php]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command built from a runtime value. Escape each argument
+      with escapeshellarg(), or avoid the shell.
+    patterns:
+      - pattern-either:
+          - pattern: system($CMD, ...)
+          - pattern: exec($CMD, ...)
+          - pattern: shell_exec($CMD)
+          - pattern: passthru($CMD, ...)
+          - pattern: popen($CMD, ...)
+          - pattern: proc_open($CMD, ...)
+      - pattern-not: $FN("...", ...)
+      - pattern-not: $FN(escapeshellcmd(...), ...)
+      - pattern-not: $FN("..." . escapeshellarg(...), ...)
+
+  - id: command-injection.ruby
+    languages: [ruby]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command with a value interpolated into it. Pass the
+      program and its arguments separately, system("prog", arg), so no shell
+      parses the value.
+    pattern-either:
+      - pattern: system("...#{...}...")
+      - pattern: exec("...#{...}...")
+      - pattern: spawn("...#{...}...")
+      - pattern: '`...#{...}...`'
+      - pattern: IO.popen("...#{...}...", ...)
+      - pattern: Open3.$F("...#{...}...", ...)
+
+  - id: command-injection.csharp
+    languages: [csharp]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      A shell runs a command built from a runtime value. Start the program
+      directly and pass the value through ArgumentList.
+    patterns:
+      - pattern-either:
+          - pattern: Process.Start("$SH", $ARGS)
+          - pattern: new ProcessStartInfo("$SH", $ARGS)
+      - metavariable-regex:
+          metavariable: $SH
+          regex: ^(cmd|cmd\.exe|powershell|powershell\.exe|pwsh|/bin/sh|/bin/bash|bash|sh)$
+      - pattern-not: Process.Start("$SH", "...")
+      - pattern-not: new ProcessStartInfo("$SH", "...")
+
+  - id: command-injection.c
+    languages: [c, cpp]
+    severity: ERROR
+    metadata: { codelens_rule: COMMAND_INJECTION }
+    message: >-
+      system()/popen() hands this string to a shell, and it is not a constant.
+      Use execv-style calls with an argument array instead.
+    patterns:
+      - pattern-either:
+          - pattern: system($CMD)
+          - pattern: popen($CMD, ...)
+      - pattern-not: system("...")
+      - pattern-not: popen("...", ...)
+
+  # --------------------------------------------------------------- CODE_INJECTION
+
+  - id: code-injection.python
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: CODE_INJECTION }
+    message: >-
+      eval()/exec() runs a string as Python code, and this string is not a
+      constant. Use ast.literal_eval for data, or a lookup table for dispatch.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: exec("...", ...)
+
+  - id: code-injection.js
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: CODE_INJECTION }
+    message: >-
+      A string that is not a constant is run as code. Parse data with
+      JSON.parse, or dispatch through a lookup table.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(..., $X)
+          - pattern: Function(..., $X)
+      - pattern-not: eval("...")
+      - pattern-not: new Function(..., "...")
+      - pattern-not: Function(..., "...")
+
+  - id: code-injection.js-timer-string
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: CODE_INJECTION }
+    message: >-
+      Given a string, $T evaluates it as code, and this string is built from a
+      runtime value. Pass a function instead: $T(() => ..., delay).
+    patterns:
+      - pattern: $T($ARG, ...)
+      # The first argument is a string built with + or a template with ${...}
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?s)^(?:['"].*['"]\s*\+.*|.*\+\s*['"].*|`.*\$\{.*)$
+      - metavariable-regex:
+          metavariable: $T
+          regex: ^(setTimeout|setInterval|setImmediate)$
+
+  - id: code-injection.php
+    languages: [php]
+    severity: ERROR
+    metadata: { codelens_rule: CODE_INJECTION }
+    message: eval() runs a string as PHP code, and this string is not a constant.
+    patterns:
+      - pattern: eval($X)
+      - pattern-not: eval("...")
+
+  - id: code-injection.ruby
+    languages: [ruby]
+    severity: ERROR
+    metadata: { codelens_rule: CODE_INJECTION }
+    message: >-
+      eval runs a string as Ruby code, and this string is not a constant. Use
+      public_send with an allow-list, or a lookup hash.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: $O.instance_eval($X, ...)
+          - pattern: $O.class_eval($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: $O.instance_eval("...", ...)
+      - pattern-not: $O.class_eval("...", ...)
+
+  # --------------------------------------------------- INSECURE_DESERIALIZATION
+
+  - id: insecure-deserialization.python
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: INSECURE_DESERIALIZATION }
+    message: >-
+      This deserialiser can run arbitrary code while it loads. Never give it
+      bytes from a request, a cache, or anywhere else an attacker can write.
+      Use JSON, or yaml.safe_load for YAML.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: cPickle.loads(...)
+      - pattern: _pickle.loads(...)
+      - pattern: dill.loads(...)
+      - pattern: marshal.loads(...)
+      - pattern: jsonpickle.decode(...)
+      - pattern: yaml.unsafe_load(...)
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=CSafeLoader, ...)
+
+  - id: insecure-deserialization.php
+    languages: [php]
+    severity: ERROR
+    metadata: { codelens_rule: INSECURE_DESERIALIZATION }
+    message: >-
+      unserialize() on a value that is not a constant can instantiate any
+      class (PHP object injection). Use json_decode, or pass
+      ['allowed_classes' => false].
+    patterns:
+      - pattern: unserialize($X)
+      - pattern-not: unserialize("...")
+
+  - id: insecure-deserialization.ruby
+    languages: [ruby]
+    severity: ERROR
+    metadata: { codelens_rule: INSECURE_DESERIALIZATION }
+    message: >-
+      Marshal.load can instantiate any object and run code on the way. Never
+      give it data from outside the process; use JSON.
+    pattern-either:
+      - pattern: Marshal.load(...)
+      - pattern: Marshal.restore(...)
+      - pattern: YAML.unsafe_load(...)
+      - pattern: Psych.unsafe_load(...)
+
+  - id: insecure-deserialization.csharp
+    languages: [csharp]
+    severity: ERROR
+    metadata: { codelens_rule: INSECURE_DESERIALIZATION }
+    message: >-
+      This deserialiser can be made to construct attacker-chosen types. Microsoft
+      marks BinaryFormatter obsolete and unsafe; use System.Text.Json, and keep
+      Json.NET's TypeNameHandling at None.
+    pattern-either:
+      - pattern: new BinaryFormatter()
+      - pattern: new NetDataContractSerializer(...)
+      - pattern: new LosFormatter(...)
+      - pattern: new SoapFormatter(...)
+      - pattern: TypeNameHandling.All
+      - pattern: TypeNameHandling.Auto
+      - pattern: TypeNameHandling.Objects
+
+  - id: insecure-deserialization.js
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: INSECURE_DESERIALIZATION }
+    message: >-
+      node-serialize's unserialize runs functions embedded in its input
+      (CVE-2017-5941). Use JSON.parse.
+    pattern-either:
+      - pattern: require('node-serialize').unserialize(...)
+      - pattern: |
+          $S = require('node-serialize');
+          ...
+          $S.unserialize(...);
+      - pattern: |
+          import $S from 'node-serialize';
+          ...
+          $S.unserialize(...);
+
+  # ----------------------------------------------------------- TLS_VERIFY_DISABLED
+
+  - id: tls-verify-disabled.python
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: >-
+      Certificate checking is switched off, so anyone on the network path can
+      read and change this traffic. Fix the CA bundle instead (verify="/path/ca.pem").
+    pattern-either:
+      - pattern: $F(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $CTX.verify_mode = ssl.CERT_NONE
+      - pattern: $CTX.check_hostname = False
+
+  - id: tls-verify-disabled.js
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: >-
+      Certificate checking is switched off, so anyone on the network path can
+      read and change this traffic. Trust the right CA (the ca option) instead.
+    pattern-either:
+      - pattern-regex: \brejectUnauthorized["']?\s*:\s*false\b
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+
+  - id: tls-verify-disabled.go
+    languages: [go]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: >-
+      InsecureSkipVerify accepts any certificate, so anyone on the network path
+      can read and change this traffic. Add the CA to RootCAs instead.
+    pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+
+  - id: tls-verify-disabled.php
+    languages: [php]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: Certificate checking is switched off for this cURL request.
+    pattern-either:
+      - pattern: curl_setopt($C, CURLOPT_SSL_VERIFYPEER, false)
+      - pattern: curl_setopt($C, CURLOPT_SSL_VERIFYPEER, 0)
+      - pattern: curl_setopt($C, CURLOPT_SSL_VERIFYHOST, 0)
+      - pattern: curl_setopt($C, CURLOPT_SSL_VERIFYHOST, false)
+
+  - id: tls-verify-disabled.ruby
+    languages: [ruby]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: VERIFY_NONE accepts any certificate, so anyone on the network path can read and change this traffic.
+    pattern: OpenSSL::SSL::VERIFY_NONE
+
+  - id: tls-verify-disabled.csharp
+    languages: [csharp]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: >-
+      This certificate callback returns true for every certificate, so anyone
+      on the network path can read and change this traffic.
+    pattern-either:
+      - pattern: $H.ServerCertificateCustomValidationCallback = (...) => true
+      - pattern: ServicePointManager.ServerCertificateValidationCallback = (...) => true
+      - pattern: $H.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+
+  - id: tls-verify-disabled.kotlin
+    languages: [kotlin]
+    severity: WARNING
+    metadata: { codelens_rule: TLS_VERIFY_DISABLED }
+    message: >-
+      This HostnameVerifier accepts every host, so a valid certificate for any
+      site is accepted for this one.
+    pattern-either:
+      - pattern: 'HostnameVerifier { $A, $B -> true }'
+      - pattern: '$X.hostnameVerifier { $A, $B -> true }'
+
+  # ----------------------------------------------------------------- UNSAFE_HTML
+
+  - id: unsafe-html.js
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: >-
+      A value that is not a constant is written into the page as HTML, so any
+      markup in it runs (cross-site scripting). Use textContent, or sanitise
+      with DOMPurify first.
+    patterns:
+      - pattern-either:
+          - pattern: $E.innerHTML = $X
+          - pattern: $E.outerHTML = $X
+          - pattern: document.write($X)
+          - pattern: document.writeln($X)
+          - pattern: $E.insertAdjacentHTML($P, $X)
+          - pattern: '<$EL dangerouslySetInnerHTML={{__html: $X}} />'
+          - pattern: '{dangerouslySetInnerHTML: {__html: $X}}'
+      - pattern-not: $E.innerHTML = "..."
+      - pattern-not: $E.outerHTML = "..."
+      - pattern-not: $E.innerHTML = `...`
+      - pattern-not: document.write("...")
+      - pattern-not: $E.insertAdjacentHTML($P, "...")
+      - pattern-not: $E.innerHTML = DOMPurify.sanitize(...)
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(...)}} />'
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: "..."}} />'
+      - focus-metavariable: $X
+
+  - id: unsafe-html.php
+    languages: [php]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: >-
+      Request input is echoed into the page unescaped (cross-site scripting).
+      Wrap it in htmlspecialchars($value, ENT_QUOTES).
+    patterns:
+      - pattern-either:
+          - pattern: echo <... $_GET[...] ...>;
+          - pattern: echo <... $_POST[...] ...>;
+          - pattern: echo <... $_REQUEST[...] ...>;
+          - pattern: echo <... $_COOKIE[...] ...>;
+      - pattern-not: echo <... htmlspecialchars(...) ...>;
+      - pattern-not: echo <... htmlentities(...) ...>;
+      - pattern-not: echo <... intval(...) ...>;
+
+  - id: unsafe-html.python
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: >-
+      A value that is not a constant is marked safe HTML or rendered as a
+      template, so markup (or Jinja code) in it runs. Let the template escape
+      it, or use format_html.
+    patterns:
+      - pattern-either:
+          - pattern: mark_safe($X)
+          - pattern: django.utils.safestring.mark_safe($X)
+          - pattern: Markup($X)
+          - pattern: markupsafe.Markup($X)
+          - pattern: flask.render_template_string($X, ...)
+          - pattern: render_template_string($X, ...)
+      - pattern-not: $F("...", ...)
+
+  - id: unsafe-html.ruby
+    languages: [ruby]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: >-
+      A string with a value interpolated into it is marked html_safe, so
+      markup in the value runs. Let ERB escape it, or use sanitize.
+    pattern-either:
+      - pattern: '"...#{...}...".html_safe'
+      - pattern: 'raw("...#{...}...")'
+
+  - id: unsafe-html.go
+    languages: [go]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: >-
+      template.HTML marks this value as trusted markup, so html/template stops
+      escaping it. Pass the plain string and let the template escape it.
+    patterns:
+      - pattern: template.HTML($X)
+      - pattern-not: template.HTML("...")
+
+  - id: unsafe-html.csharp
+    languages: [csharp]
+    severity: WARNING
+    metadata: { codelens_rule: UNSAFE_HTML }
+    message: Html.Raw writes this value without encoding, so markup in it runs.
+    patterns:
+      - pattern: Html.Raw($X)
+      - pattern-not: Html.Raw("...")
+
+  # ------------------------------------------------------------- PERMISSIVE_CORS
+
+  - id: permissive-cors.python
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: >-
+      CORS allows every origin, so any website can call this API from a
+      visitor's browser. List the front-end origins that need it.
+    pattern-either:
+      - pattern: CORS($APP)
+      - pattern: flask_cors.CORS($APP)
+      - pattern: CORS(..., origins="*", ...)
+      - pattern: $APP.add_middleware(CORSMiddleware, ..., allow_origins=["*"], ...)
+      - pattern: CORS_ALLOW_ALL_ORIGINS = True
+      - pattern: CORS_ORIGIN_ALLOW_ALL = True
+
+  - id: permissive-cors.js
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: >-
+      CORS allows every origin, so any website can call this API from a
+      visitor's browser. Pass cors({ origin: [...] }) with the front-end origins.
+    pattern-either:
+      - pattern: $APP.use(cors())
+      - pattern: 'cors({..., origin: "*", ...})'
+      - pattern: 'cors({..., origin: true, ...})'
+      - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
+      - pattern: $RES.header("Access-Control-Allow-Origin", "*")
+      - pattern: $RES.set("Access-Control-Allow-Origin", "*")
+
+  - id: permissive-cors.go
+    languages: [go]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: >-
+      CORS allows every origin, so any website can call this API from a
+      visitor's browser. List the front-end origins that need it.
+    pattern-either:
+      - pattern: '$W.Header().Set("Access-Control-Allow-Origin", "*")'
+      - pattern: 'cors.Config{..., AllowAllOrigins: true, ...}'
+      - pattern: 'cors.Options{..., AllowedOrigins: []string{"*"}, ...}'
+
+  - id: permissive-cors.php
+    languages: [php]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: CORS allows every origin, so any website can call this endpoint from a visitor's browser.
+    pattern: 'header("Access-Control-Allow-Origin: *")'
+
+  - id: permissive-cors.csharp
+    languages: [csharp]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: AllowAnyOrigin lets any website call this API from a visitor's browser. Use WithOrigins(...).
+    pattern: $P.AllowAnyOrigin()
+
+  - id: permissive-cors.kotlin
+    languages: [kotlin]
+    severity: WARNING
+    metadata: { codelens_rule: PERMISSIVE_CORS }
+    message: anyHost() lets any website call this API from a visitor's browser. Use allowHost(...).
+    pattern: anyHost()
+
+  # --------------------------------------------------------------- CSRF_DISABLED
+
+  - id: csrf-disabled.python
+    languages: [python]
+    severity: INFO
+    metadata: { codelens_rule: CSRF_DISABLED }
+    message: >-
+      CSRF protection is switched off for this view. Fine for a token-only API;
+      a hole if the browser authenticates with a session cookie.
+    pattern-either:
+      - pattern: |
+          @csrf_exempt
+          def $F(...): ...
+      - pattern: WTF_CSRF_ENABLED = False
+
+  - id: csrf-disabled.ruby
+    languages: [ruby]
+    severity: INFO
+    metadata: { codelens_rule: CSRF_DISABLED }
+    message: >-
+      CSRF verification is skipped. Fine for a token-only API; a hole if the
+      browser authenticates with a session cookie.
+    pattern: skip_before_action :verify_authenticity_token, ...
+
+  - id: csrf-disabled.csharp
+    languages: [csharp]
+    severity: INFO
+    metadata: { codelens_rule: CSRF_DISABLED }
+    message: Anti-forgery validation is switched off for this endpoint.
+    pattern: '[IgnoreAntiforgeryToken] $RET $M(...) {...}'
+
+  - id: csrf-disabled.kotlin
+    languages: [kotlin]
+    severity: INFO
+    metadata: { codelens_rule: CSRF_DISABLED }
+    message: >-
+      CSRF protection switched off. Fine for a stateless token API, a hole for
+      cookie sessions.
+    pattern-either:
+      - pattern: 'csrf { disable() }'
+      - pattern: $H.csrf().disable()
+      - pattern: '$H.csrf { $C -> $C.disable() }'
+
+  # --------------------------------------------------------- SWALLOWED_EXCEPTION
+
+  - id: swallowed-exception.python
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: >-
+      Every error is caught here and dropped, so failures (and bugs) vanish
+      silently. Catch the specific exception you expect, or log and re-raise.
+    pattern-either:
+      - pattern: |
+          try:
+              ...
+          except:
+              pass
+      - pattern: |
+          try:
+              ...
+          except Exception:
+              pass
+      - pattern: |
+          try:
+              ...
+          except Exception as $E:
+              pass
+      - pattern: |
+          try:
+              ...
+          except BaseException:
+              pass
+
+  - id: swallowed-exception.js
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: >-
+      The error is caught and dropped, so the failure vanishes silently and the
+      code carries on as if it worked. Handle it, or log and rethrow.
+    pattern-either:
+      - pattern: |
+          try { ... } catch ($E) {}
+      - pattern: |
+          try { ... } catch {}
+      - pattern: $P.catch(() => {})
+      - pattern: $P.catch(function () {})
+
+  - id: swallowed-exception.go
+    languages: [go]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: >-
+      The error is checked and then ignored: execution carries on with a
+      value that may be invalid. Return it, wrap it, or log it.
+    pattern: |
+      if $ERR != nil {
+      }
+
+  - id: swallowed-exception.csharp
+    languages: [csharp]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: Every exception is caught and dropped here, so the failure vanishes silently.
+    pattern-either:
+      - pattern: |
+          try { ... } catch { }
+      - pattern: |
+          try { ... } catch (Exception $E) { }
+      - pattern: |
+          try { ... } catch (Exception) { }
+
+  - id: swallowed-exception.php
+    languages: [php]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: The exception is caught and dropped, so the failure vanishes silently.
+    pattern-either:
+      - pattern: |
+          try { ... } catch (Exception $E) { }
+      - pattern: |
+          try { ... } catch (\Exception $E) { }
+      - pattern: |
+          try { ... } catch (Throwable $E) { }
+      - pattern: |
+          try { ... } catch (\Throwable $E) { }
+
+  - id: swallowed-exception.kotlin
+    languages: [kotlin]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: The exception is caught and dropped, so the failure vanishes silently.
+    pattern-either:
+      - pattern: |
+          try { ... } catch ($E: Exception) { }
+      - pattern: |
+          try { ... } catch ($E: Throwable) { }
+
+  - id: swallowed-exception.cpp
+    languages: [cpp]
+    severity: WARNING
+    metadata: { codelens_rule: SWALLOWED_EXCEPTION }
+    message: catch (...) with an empty body drops every exception, including ones that signal a bug.
+    pattern: |
+      try { ... } catch (...) { }
+
+  # ----------------------------------------------------------------- DEBUG_MODE
+
+  - id: debug-mode.flask
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: DEBUG_MODE }
+    message: >-
+      Debug mode serves stack traces and an interactive debugger that runs any
+      Python a visitor types. Read it from the environment and keep it off in
+      production.
+    pattern: $APP.run(..., debug=True, ...)
+
+  - id: debug-mode.django
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: DEBUG_MODE }
+    message: >-
+      DEBUG = True shows full stack traces and settings to any visitor who
+      triggers an error. Read it from the environment and keep it off in
+      production.
+    paths:
+      include: ["*settings*.py", "*production*.py", "*prod.py"]
+    pattern: DEBUG = True
+
+  # ------------------------------------------------------ UNSAFE_BUFFER_FUNCTION
+
+  - id: unsafe-buffer-function.c
+    languages: [c, cpp]
+    severity: ERROR
+    metadata: { codelens_rule: UNSAFE_BUFFER_FUNCTION }
+    message: >-
+      $F writes into a buffer without knowing its size, so a long enough input
+      overflows it. Use fgets / strncpy / snprintf with the buffer size, or a
+      %Ns width in scanf.
+    patterns:
+      - pattern-either:
+          - pattern: gets(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: strcpy($D, $S)
+                  - pattern: strcat($D, $S)
+              - pattern-not: strcpy($D, "...")
+              - pattern-not: strcat($D, "...")
+          - patterns:
+              - pattern: sprintf($B, "$FMT", ...)
+              - metavariable-regex:
+                  metavariable: $FMT
+                  regex: '.*%s.*'
+          - patterns:
+              - pattern-either:
+                  - pattern: scanf("$FMT", ...)
+                  - pattern: fscanf($FP, "$FMT", ...)
+              - metavariable-regex:
+                  metavariable: $FMT
+                  regex: '.*%s.*'
+      - pattern-either:
+          - pattern: $F(...)
+
+  # ------------------------------------------------------------ language-specific bugs
+
+  - id: mutable-default-argument.python
+    languages: [python]
+    severity: WARNING
+    metadata: { codelens_rule: MUTABLE_DEFAULT_ARGUMENT }
+    message: >-
+      This default list/dict/set is created once, when the function is
+      defined, and shared by every call that omits the argument, so changes
+      leak between calls. Default to None and create it inside.
+    pattern-either:
+      - pattern: 'def $F(..., $A=[...], ...): ...'
+      - pattern: 'def $F(..., $A={...}, ...): ...'
+      - pattern: 'def $F(..., $A=set(), ...): ...'
+      - pattern: 'def $F(..., $A=list(), ...): ...'
+      - pattern: 'def $F(..., $A=dict(), ...): ...'
+
+  - id: literal-identity-comparison.python
+    languages: [python]
+    severity: ERROR
+    metadata: { codelens_rule: LITERAL_IDENTITY_COMPARISON }
+    message: >-
+      'is' compares object identity, not value. Against a string or number
+      literal it works only by interning luck and differs between runs and
+      Python versions. Use == (or !=).
+    patterns:
+      - pattern-either:
+          - pattern: $X is $L
+          - pattern: $X is not $L
+      - metavariable-regex:
+          metavariable: $L
+          regex: ^(-?\d[\d_]*(\.\d+)?|[rbuf]?["'].*["'])$
+
+  - id: nan-comparison.js
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata: { codelens_rule: NAN_COMPARISON }
+    message: >-
+      Nothing is equal to NaN, not even NaN, so this comparison is always
+      false (or always true for !=). Use Number.isNaN(x).
+    pattern-either:
+      - pattern: $X === NaN
+      - pattern: $X == NaN
+      - pattern: $X !== NaN
+      - pattern: $X != NaN
+      - pattern: NaN === $X
+      - pattern: NaN == $X
+
+  - id: defer-in-loop.go
+    languages: [go]
+    severity: WARNING
+    metadata: { codelens_rule: DEFER_IN_LOOP }
+    message: >-
+      defer runs when the function returns, not at the end of each iteration,
+      so every file/lock/connection opened in this loop stays open until then.
+      Move the body into a function, or close explicitly.
+    patterns:
+      - pattern-inside: |
+          for ... {
+            ...
+          }
+      - pattern-not-inside: |
+          func(...) {
+            ...
+          }(...)
+      - pattern-not-inside: |
+          func(...) {
+            ...
+          }
+      - pattern: defer $X(...)

@@ -29,23 +29,48 @@ public final class RuleCatalog {
 
     private RuleCatalog() {}
 
-    public static final Map<String, Rule> CODELENS = Map.of(
-        "SQL_INJECTION", new Rule(SECURITY, HIGH,
-            "SQL built by concatenating or formatting values into the query text instead of binding parameters."),
-        "COMMAND_INJECTION", new Rule(SECURITY, HIGH,
-            "An OS command built from non-constant values and passed to Runtime.exec or ProcessBuilder."),
-        "HARDCODED_SECRET", new Rule(SECURITY, HIGH,
-            "A credential, key or token written into the source as a string literal."),
-        "PERMISSIVE_CORS", new Rule(SECURITY, MEDIUM,
-            "@CrossOrigin allowing every origin, so any website can call this endpoint from a browser."),
-        "CSRF_DISABLED", new Rule(SECURITY, LOW,
-            "CSRF protection switched off. Fine for a stateless token API, a hole for cookie sessions."),
-        "SWALLOWED_EXCEPTION", new Rule(RELIABILITY, MEDIUM,
-            "A catch block that only prints the stack trace and carries on as if nothing failed."),
-        "PROXY_ANNOTATION_ON_PRIVATE", new Rule(BUG, MEDIUM,
-            "@Transactional, @Async or @Cacheable on a private or final method, which Spring proxies silently ignore."),
-        "MISSING_TEST", new Rule(TESTING, MEDIUM,
-            "New or changed public behaviour in production code with no test file touched in this PR.")
+    /**
+     * CodeLens's own rules. The first group runs on every language (Java via
+     * JavaRules, the rest via the Semgrep pack in semgrep/codelens-rules.yml,
+     * secrets via SecretScanner); the second is language-specific.
+     */
+    public static final Map<String, Rule> CODELENS = Map.ofEntries(
+        Map.entry("SQL_INJECTION", new Rule(SECURITY, HIGH,
+            "SQL built by concatenating, formatting or interpolating values into the query text instead of binding parameters.")),
+        Map.entry("COMMAND_INJECTION", new Rule(SECURITY, HIGH,
+            "An OS command built from non-constant values and handed to a shell (Runtime.exec, os.system, child_process.exec, sh -c, system()).")),
+        Map.entry("CODE_INJECTION", new Rule(SECURITY, HIGH,
+            "A string that is not a constant is executed as code (eval, exec, new Function, a string passed to setTimeout).")),
+        Map.entry("INSECURE_DESERIALIZATION", new Rule(SECURITY, HIGH,
+            "A deserialiser that can construct arbitrary objects or run code while loading (pickle, yaml.load, unserialize, Marshal.load, BinaryFormatter).")),
+        Map.entry("HARDCODED_SECRET", new Rule(SECURITY, HIGH,
+            "A credential, key or token written into the source or a config file as a literal.")),
+        Map.entry("UNSAFE_BUFFER_FUNCTION", new Rule(SECURITY, HIGH,
+            "A C string function that writes into a buffer without a size limit (gets, strcpy, strcat, sprintf/scanf with %s).")),
+        Map.entry("TLS_VERIFY_DISABLED", new Rule(SECURITY, MEDIUM,
+            "TLS certificate or hostname verification switched off, so the connection can be intercepted.")),
+        Map.entry("UNSAFE_HTML", new Rule(SECURITY, MEDIUM,
+            "A value that is not a constant is written into a page as raw HTML or marked safe, so markup in it runs (cross-site scripting).")),
+        Map.entry("PERMISSIVE_CORS", new Rule(SECURITY, MEDIUM,
+            "CORS configured to allow every origin, so any website can call this endpoint from a visitor's browser.")),
+        Map.entry("DEBUG_MODE", new Rule(SECURITY, MEDIUM,
+            "A framework's debug mode switched on in code, which exposes stack traces, settings or an interactive debugger.")),
+        Map.entry("CSRF_DISABLED", new Rule(SECURITY, LOW,
+            "CSRF protection switched off. Fine for a stateless token API, a hole for cookie sessions.")),
+        Map.entry("SWALLOWED_EXCEPTION", new Rule(RELIABILITY, MEDIUM,
+            "A catch/except block that ignores the error or only prints it, then carries on as if nothing failed.")),
+        Map.entry("PROXY_ANNOTATION_ON_PRIVATE", new Rule(BUG, MEDIUM,
+            "@Transactional, @Async or @Cacheable on a private or final method, which Spring proxies silently ignore.")),
+        Map.entry("MISSING_TEST", new Rule(TESTING, MEDIUM,
+            "New or changed public behaviour in production code with no test file touched in this PR.")),
+        Map.entry("MUTABLE_DEFAULT_ARGUMENT", new Rule(BUG, MEDIUM,
+            "Python: a list, dict or set as a default argument is shared by every call that omits it.")),
+        Map.entry("LITERAL_IDENTITY_COMPARISON", new Rule(BUG, HIGH,
+            "Python: 'is' used to compare with a string or number literal; it tests identity, not equality.")),
+        Map.entry("NAN_COMPARISON", new Rule(BUG, HIGH,
+            "JavaScript: comparing with NaN using == or ===, which is always false.")),
+        Map.entry("DEFER_IN_LOOP", new Rule(RELIABILITY, MEDIUM,
+            "Go: defer inside a loop, so every resource opened in the loop stays open until the function returns."))
     );
 
     public static final Map<String, Rule> PMD = Map.ofEntries(

@@ -58,16 +58,16 @@ public class JavaRules {
     private static final Pattern SQL_TEXT = Pattern.compile(
         "(?i)\\b(select|insert\\s+into|update|delete\\s+from|merge\\s+into|where|from|values|order\\s+by|group\\s+by)\\b");
 
-    private static final Pattern SECRET_NAME = Pattern.compile(
+    static final Pattern SECRET_NAME = Pattern.compile(
         "(?i).*(password|passwd|pwd|secret|api_?key|access_?key|private_?key|token|credential).*");
     // Names that mention a secret without holding one: TOKEN_HEADER, PASSWORD_PARAM, SECRET_PROPERTY...
-    private static final Pattern NOT_A_SECRET_NAME = Pattern.compile(
+    static final Pattern NOT_A_SECRET_NAME = Pattern.compile(
         "(?i).*(header|param|field|name|label|url|uri|endpoint|path|prefix|property|prop|attr|message|msg|"
         + "pattern|regex|format|type|key_name|column|claim|cookie|query|policy|length|expir|ttl|validity).*");
-    private static final Pattern PLACEHOLDER = Pattern.compile(
+    static final Pattern PLACEHOLDER = Pattern.compile(
         "(?i).*(\\$\\{|\\{\\{|changeme|change_me|example|dummy|placeholder|your[_-]|<[^>]+>|xxx|\\*\\*\\*).*");
     // Formats that are a secret whatever the variable is called.
-    private static final Pattern KNOWN_TOKEN = Pattern.compile(
+    static final Pattern KNOWN_TOKEN = Pattern.compile(
         "(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\\-]{35}"
         + "|sk-[A-Za-z0-9_\\-]{20,}|xox[baprs]-[A-Za-z0-9\\-]{10,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)");
 
@@ -80,7 +80,7 @@ public class JavaRules {
     public List<Finding> analyze(List<ChangedFile> files) {
         List<Finding> out = new ArrayList<>();
         for (ChangedFile f : files) {
-            parse(f).ifPresent(cu -> analyzeUnit(f, cu, out));
+            if (f.isJava()) parse(f).ifPresent(cu -> analyzeUnit(f, cu, out));
         }
         return out;
     }

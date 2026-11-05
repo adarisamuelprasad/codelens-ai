@@ -15,7 +15,8 @@ import com.codelens.diff.ChangedFile;
 
 class PipelineTest {
 
-    private final AnalysisPipeline pipeline = new AnalysisPipeline(new PmdAnalyzer(), new JavaRules(), new MissingTestRule(), 50);
+    private final AnalysisPipeline pipeline = new AnalysisPipeline(new PmdAnalyzer(), new JavaRules(), new MissingTestRule(),
+        new SecretScanner(), new SemgrepAnalyzer("", 60), 50);
 
     private static List<String> ids(List<Finding> f) {
         return f.stream().map(Finding::ruleId).toList();
@@ -84,7 +85,8 @@ class PipelineTest {
         // Not named "unused...": PMD deliberately skips locals with that prefix.
         for (int i = 0; i < 10; i++) src.append("    int count").append(i).append(" = ").append(i).append(";\n");
         src.append("    st.executeQuery(\"SELECT * FROM t WHERE id = \" + id);\n  }\n}\n");
-        List<Finding> out = new AnalysisPipeline(new PmdAnalyzer(), new JavaRules(), new MissingTestRule(), 5)
+        List<Finding> out = new AnalysisPipeline(new PmdAnalyzer(), new JavaRules(), new MissingTestRule(),
+        new SecretScanner(), new SemgrepAnalyzer("", 60), 5)
             .analyze(List.of(JavaRulesTest.file("src/main/java/A.java", src.toString())));
         assertEquals(5, out.size());
         assertEquals("SQL_INJECTION", out.get(0).ruleId());
